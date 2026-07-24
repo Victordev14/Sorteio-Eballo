@@ -456,19 +456,48 @@ canvas#confetti-canvas{
 
 <canvas id="confetti-canvas"></canvas>
 
-<script>
+<script type="module">
+/* ==========================================================================
+   Sorteio Ekballo — agora com Firebase Realtime Database.
+   Todos os participantes, o histórico e o vencedor sorteado ficam
+   sincronizados em tempo real entre todos os aparelhos conectados.
+   ========================================================================== */
+
+// ---------------------------------------------------------------------
+// 1) CONFIGURAÇÃO DO FIREBASE (projeto Sorteio-Ekballo)
+// ---------------------------------------------------------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyDtVJ-SDOmH18Bip6wfswQyqf8PSl6bsT4",
+  authDomain: "sorteio-ekballo.firebaseapp.com",
+  databaseURL: "https://sorteio-ekballo-default-rtdb.firebaseio.com",
+  projectId: "sorteio-ekballo",
+  storageBucket: "sorteio-ekballo.firebasestorage.app",
+  messagingSenderId: "813629725074",
+  appId: "1:813629725074:web:6d57708d512941e187094b",
+  measurementId: "G-6E09S61M8L"
+};
+
+const ORG_PASSWORD = "Ekballo1234";
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getDatabase, ref, push, onValue, remove
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const participantsRef = ref(db, "participantes");
+const historyRef = ref(db, "historico");
+
 (function () {
   "use strict";
 
-  /* ================= Configuração ================= */
-  const ORG_PASSWORD = "Ekballo1234";
-  const STORAGE_PARTICIPANTS = "ekballo_participants_v2";
-  const STORAGE_HISTORY = "ekballo_history_v2";
   const ROULETTE_ITEM_HEIGHT = 56;
 
   /* ================= Estado ================= */
-  let participants = loadJSON(STORAGE_PARTICIPANTS, []);
-  let history = loadJSON(STORAGE_HISTORY, []);
+  let participants = [];  // [{ id, name, church }] — ao vivo, vem do Firebase
+  let history = [];       // [{ id, name, church, date }] — ao vivo, vem do Firebase
   let isOrganizer = false;
   let lastWinner = null;
 
@@ -511,29 +540,15 @@ canvas#confetti-canvas{
   const closeModalBtn = document.getElementById("closeModalBtn");
 
   /* ================= Utilidades ================= */
-  function loadJSON(key, fallback) {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch (e) { return fallback; }
-  }
-  function saveParticipants() {
-    try { localStorage.setItem(STORAGE_PARTICIPANTS, JSON.stringify(participants)); } catch (e) {}
-  }
-  function saveHistory() {
-    try { localStorage.setItem(STORAGE_HISTORY, JSON.stringify(history)); } catch (e) {}
-  }
   function normalize(raw) { return String(raw || "").trim().replace(/\s+/g, " "); }
-  function makeId() {
-    return window.crypto && crypto.randomUUID ? crypto.randomUUID() : "id_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-  }
+
   function showFeedback(el, msg, kind) {
     el.textContent = msg;
     el.className = "feedback" + (kind ? " " + kind : "");
     if (msg) setTimeout(() => { el.textContent = ""; el.className = "feedback"; }, 4000);
   }
 
-  /* ================= Cadastro público ================= */
+  /* ================= Cadastro público (grava no Firebase) ================= */
   function submitRegistration() {
     const name = normalize(nameInput.value);
     const church = normalize(churchInput.value);
@@ -547,45 +562,30 @@ canvas#confetti-canvas{
       return;
     }
 
-    participants.push({ id: makeId(), name: name, church: church });
-    saveParticipants();
-    renderParticipants();
-
-    nameInput.value = "";
-    churchInput.value = "";
-    showFeedback(formFeedback, "Cadastro realizado com sucesso! Aguarde o sorteio.", "ok");
+    push(participantsRef, { name: name, church: church, ts: Date.now() })
+      .then(() => {
+        nameInput.value = "";
+        churchInput.value = "";
+        showFeedback(formFeedback, "Cadastro realizado com sucesso! Aguarde o sorteio.", "ok");
+      })
+      .catch(() => {
+        showFeedback(formFeedback, "Não foi possível cadastrar agora. Tente novamente.", "err");
+      });
   }
 
   submitBtn.addEventListener("click", submitRegistration);
   nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); churchInput.focus(); } });
   churchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitRegistration(); } });
 
-  /* ================= Área do organizador ================= */
-  function applyOrganizerState() {
-    lockForm.classList.toggle("hidden", isOrganizer);
-    organizerContent.classList.toggle("hidden", !isOrganizer);
-    participantsCard.classList.toggle("hidden", !isOrganizer);
-    drawCard.classList.toggle("hidden", !isOrganizer);
-    historyCard.classList.toggle("hidden", !isOrganizer);
+  /* ================= Participantes ao vivo (Firebase) ================= */
+  onValue(participantsRef, (snap) => {
+    const val = snap.val() || {};
+    participants = Object.keys(val)
+      .map((id) => ({ id, name: val[id].name, church: val[id].church, ts: val[id].ts || 0 }))
+      .sort((a, b) => a.ts - b.ts);
     renderParticipants();
-    renderHistory();
-  }
+  });
 
-  function tryUnlock() {
-    if (orgPassword.value.trim() === ORG_PASSWORD) {
-      isOrganizer = true;
-      orgPassword.value = "";
-      showFeedback(lockFeedback, "", "");
-      applyOrganizerState();
-    } else {
-      showFeedback(lockFeedback, "Senha inválida.", "err");
-    }
-  }
-  unlockBtn.addEventListener("click", tryUnlock);
-  orgPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); tryUnlock(); } });
-  lockAgainBtn.addEventListener("click", () => { isOrganizer = false; applyOrganizerState(); });
-
-  /* ================= Lista de participantes ================= */
   function renderParticipants() {
     tagsContainer.innerHTML = "";
     counterBadge.textContent = participants.length + (participants.length === 1 ? " participante" : " participantes");
@@ -617,15 +617,38 @@ canvas#confetti-canvas{
         removeBtn.textContent = "✕";
         removeBtn.setAttribute("aria-label", "Remover " + p.name);
         removeBtn.addEventListener("click", () => {
-          participants = participants.filter((x) => x.id !== p.id);
-          saveParticipants();
-          renderParticipants();
+          remove(ref(db, "participantes/" + p.id));
         });
         tag.appendChild(removeBtn);
       }
       tagsContainer.appendChild(tag);
     });
   }
+
+  /* ================= Área do organizador ================= */
+  function applyOrganizerState() {
+    lockForm.classList.toggle("hidden", isOrganizer);
+    organizerContent.classList.toggle("hidden", !isOrganizer);
+    participantsCard.classList.toggle("hidden", !isOrganizer);
+    drawCard.classList.toggle("hidden", !isOrganizer);
+    historyCard.classList.toggle("hidden", !isOrganizer);
+    renderParticipants();
+    renderHistory();
+  }
+
+  function tryUnlock() {
+    if (orgPassword.value.trim() === ORG_PASSWORD) {
+      isOrganizer = true;
+      orgPassword.value = "";
+      showFeedback(lockFeedback, "", "");
+      applyOrganizerState();
+    } else {
+      showFeedback(lockFeedback, "Senha inválida.", "err");
+    }
+  }
+  unlockBtn.addEventListener("click", tryUnlock);
+  orgPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); tryUnlock(); } });
+  lockAgainBtn.addEventListener("click", () => { isOrganizer = false; applyOrganizerState(); });
 
   /* ================= Sorteio (roleta) ================= */
   function pickWinner(pool) {
@@ -661,6 +684,7 @@ canvas#confetti-canvas{
   function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
   function startDraw() {
+    if (!isOrganizer) return;
     if (participants.length < 2) {
       errorText.textContent = "É necessário no mínimo 2 participantes.";
       errorAlert.classList.add("show");
@@ -680,9 +704,6 @@ canvas#confetti-canvas{
     rouletteTrack.style.transform = "translateY(0px)";
     highlightCenter(-1);
 
-    // A roleta precisa ficar visível (overlay de tela cheia) ANTES de
-    // medir a altura da janela — medir com o overlay ainda escondido
-    // (display:none) sempre retornaria 0 e desalinharia o vencedor.
     rouletteOverlay.classList.add("show");
 
     const windowHeight = rouletteWindow.clientHeight;
@@ -723,14 +744,11 @@ canvas#confetti-canvas{
   }
 
   function finishDraw(winner) {
-    history.unshift({
-      id: makeId(),
+    push(historyRef, {
       name: winner.name,
       church: winner.church,
       date: new Date().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })
     });
-    saveHistory();
-    renderHistory();
 
     setTimeout(() => {
       rouletteOverlay.classList.remove("show");
@@ -752,9 +770,21 @@ canvas#confetti-canvas{
   closeBtn.addEventListener("click", hideModal);
   closeModalBtn.addEventListener("click", hideModal);
   modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) hideModal(); });
-  drawAgainBtn.addEventListener("click", () => { hideModal(); setTimeout(startDraw, 150); });
+  drawAgainBtn.addEventListener("click", () => {
+    if (!isOrganizer) return;
+    hideModal();
+    setTimeout(startDraw, 150);
+  });
 
-  /* ================= Histórico ================= */
+  /* ================= Histórico ao vivo (Firebase) ================= */
+  onValue(historyRef, (snap) => {
+    const val = snap.val() || {};
+    history = Object.keys(val)
+      .map((id) => ({ id, name: val[id].name, church: val[id].church, date: val[id].date }))
+      .reverse();
+    renderHistory();
+  });
+
   function renderHistory() {
     historyEmpty.style.display = history.length === 0 ? "block" : "none";
     historyList.innerHTML = "";
@@ -766,8 +796,9 @@ canvas#confetti-canvas{
     });
   }
   clearHistoryBtn.addEventListener("click", () => {
+    if (!isOrganizer) return;
     if (history.length === 0) return;
-    if (confirm("Apagar todo o histórico de vencedores?")) { history = []; saveHistory(); renderHistory(); }
+    if (confirm("Apagar todo o histórico de vencedores?")) { remove(historyRef); }
   });
 
   /* ================= Confetes ================= */
@@ -807,5 +838,6 @@ canvas#confetti-canvas{
   applyOrganizerState();
 })();
 </script>
+</body>
 </body>
 </html>
