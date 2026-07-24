@@ -386,7 +386,7 @@ canvas#confetti-canvas{
     <div id="lockForm">
       <label for="orgPassword">Senha</label>
       <div class="lock-row">
-        <input type="password" id="orgPassword" placeholder="Digite a senha">
+        <input type="password" id="orgPassword" placeholder="Digite a senha" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off">
         <button class="btn btn-primary" style="width:auto;" id="unlockBtn">Liberar</button>
       </div>
       <p class="feedback" id="lockFeedback"></p>
@@ -572,7 +572,7 @@ canvas#confetti-canvas{
   }
 
   function tryUnlock() {
-    if (orgPassword.value === ORG_PASSWORD) {
+    if (orgPassword.value.trim() === ORG_PASSWORD) {
       isOrganizer = true;
       orgPassword.value = "";
       showFeedback(lockFeedback, "", "");
